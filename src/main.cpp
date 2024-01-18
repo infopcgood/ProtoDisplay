@@ -45,7 +45,7 @@ signed short noseOffset = 0;            // (nose offset) / |(maximum nose offset
                                         // nose offset is parsed by mapping 0000001 ~ 1111111 to -63 ~ 63 unlike traditional signed variables
 
 // Global variables for video display
-char* video_filename_prefix = "boykisser/frame_";
+char* video_filename_prefix;
 char* video_filename_extension = ".png";
 uint8_t frame_cnt = 134; // obviously should not be 0
 uint8_t frame_idx_digits = 0; // automatically derived from frame_cnt, leave as 0
@@ -60,6 +60,9 @@ const unsigned short video_mode = 1;
 // Global variables for mode transition
 unsigned short mode = 1;
 
+// Other global variables
+bool initialized = false;
+
 // Other constants
 const uint32_t millisInOneLoop = 50;
 
@@ -70,6 +73,32 @@ void drawTextOnRGB24BackgroundLayer(SMLayerBackground<rgb24, 0U> layer, unsigned
         layer.drawChar(x + fontWidth * i, y, color, text[i]);
     }
     return;
+}
+
+int readVideoConfigFromJSON(const char* filename) {
+    if(!SD.exists(filename)) {
+        Serial.print("File ");
+        Serial.print(filename);
+        Serial.println(" does not exist on SD.");
+        return -1;
+    }
+    File videoDataFile = SD.open(filename);
+    StaticJsonDocument<512> videoDataJson;
+    deserializeJson(videoDataJson, videoDataFile);
+    if(initialized) {
+        free(video_filename_prefix);
+    }
+    video_filename_prefix = strdup(videoDataJson["video_filename_prefix"]);
+    frame_cnt = atoi(videoDataJson["frame_cnt"]);
+    video_idx = 0;
+    uint8_t tmp_frame_cnt = frame_cnt;
+    frame_idx_digits = 0;
+    while(tmp_frame_cnt) {
+        frame_idx_digits++;
+        tmp_frame_cnt /= 10;
+    }
+    videoDataFile.close();
+    return 0;
 }
 
 // Functions for PNG file processing, mostly copied from example code
@@ -114,7 +143,7 @@ void drawPNG(PNGDRAW *pDraw) {
         // code from stackoverflow. I'm not very proud of myself
         rgb24 pixelColor = (rgb24){((((line565[i] >> 11) & 0x1F) * 527) + 23) >> 6, ((((line565[i] >> 5) & 0x3F) * 259) + 33) >> 6, (((line565[i] & 0x1F) * 527) + 23) >> 6};
         backgroundLayer.drawPixel(i, pDraw->y, pixelColor);
-        backgroundLayer.drawPixel(i, 32+pDraw->y, pixelColor);
+        backgroundLayer.drawPixel(i, 32 + pDraw->y, pixelColor);
     }
 }
 
@@ -122,6 +151,10 @@ void drawPNG(PNGDRAW *pDraw) {
 void setup() {
     // Debug serial
     Serial.begin(9600);
+
+    // Bluetooth command serial
+    Serial5.begin(9600);
+    // pin is 1234
 
     // Initialize matrix
     matrix.addLayer(&backgroundLayer);
@@ -145,25 +178,15 @@ void setup() {
     SD.begin(BUILTIN_SDCARD);
 
     // Read video information
-    File videoDataFile = SD.open("video_data.json");
-    StaticJsonDocument<512> videoDataJson;
-    deserializeJson(videoDataJson, videoDataFile);
-    strcpy(video_filename_prefix, videoDataJson["video_filename_prefix"]);
-    frame_cnt = atoi(videoDataJson["frame_cnt"]);
-    videoDataFile.close();
+    readVideoConfigFromJSON("boykisser.json");
     Serial.println(video_filename_prefix);
     Serial.println(frame_cnt);
 
-    // Initialize some derived variables
-    // frame_idx_digits
-    uint8_t tmp_frame_cnt = frame_cnt;
-    while(tmp_frame_cnt) {
-        frame_idx_digits++;
-        tmp_frame_cnt /= 10;
-    }
-
     // Initialize Serial1 in order to communicate with Raspberry Pi Zero 2 W 
     Serial1.begin(9600);
+
+    // Set flag
+    initialized = true;
 }
 
 // Loop function
@@ -174,7 +197,38 @@ void loop() {
     char receivedData[dataLength];
     bool newData = false;
 
-    // Check for new input
+    // Check for new bluetooth input and process it
+    // no corruption check. I trust you bluetooth
+    if(Serial5.available()) {
+        delay(100);
+        char command = Serial5.read();
+        switch(command) {
+            case 'v': // video change command
+            {
+                int btDataLength = Serial5.available();
+                Serial.println(btDataLength);
+                char* btReceivedData = (char*)malloc((btDataLength + 1) * sizeof(char));
+                for(int i = 0; i < btDataLength; i++) { 
+                    btReceivedData[i] = Serial5.read();
+                }
+                btReceivedData[btDataLength] = '\0';
+                Serial5.println(btReceivedData);
+                readVideoConfigFromJSON(btReceivedData);
+                free(btReceivedData);
+                break;
+            }
+            case 'm': // mode change command
+            {
+                mode = Serial5.read() - int('0');
+                break;
+            }   
+        }
+        while(Serial5.available()) {
+            Serial5.read();
+        }
+    }
+
+    // Check for new raspberry pi input
     if(Serial1.available() > dataLength) {
         // There was some error (bytes shifted, etc..) while receiving data, discard all of it
         // TODO: salvage at least SOME of the data. ex: only retrieve the last 5 bytes
@@ -248,6 +302,7 @@ void loop() {
             break;
         case 1: // Video display mode
             // Open frame image file
+            Serial.println("OK");
             char* filename = (char*) malloc(sizeof(char) * (strlen(video_filename_prefix) + frame_idx_digits + strlen(video_filename_extension) + 1));
             char* sprintf_str = (char*) malloc(sizeof(char) * (2 + 4 + 2 + 1));
             sprintf(sprintf_str, "%%s%%0%dd%%s", frame_idx_digits);
