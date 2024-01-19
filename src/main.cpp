@@ -12,17 +12,19 @@
 #include <SmartMatrix.h>
 #include <SPI.h>
 
-// Set variables for SmartMatrix library (copied from GitHub page)
-#define COLOR_DEPTH 24                  // Choose the color depth used for storing pixels in the layers: 24 or 48 (24 is good for most sketches - If the sketch uses type `rgb24` directly, COLOR_DEPTH must be 24)
-const uint16_t kMatrixWidth = 64;       // Set to the width of your display, must be a multiple of 8
-const uint16_t kMatrixHeight = 64;      // Set to the height of your display
+// Set variables for SmartMatrix library (copied from their GitHub page)
+// If you use a non-standard HUB75 display you might have to tweak these settings a little bit.
+#define COLOR_DEPTH 24                  // COLOR_DEPTH is 24 as the code uses rgb24
+const uint16_t kMatrixWidth = 64;       // We're using two 64x32 displays daisy chained, the right one (from the outside) will
+const uint16_t kMatrixHeight = 64;      // be the up 32 lines, left one (from the outside) will be the bottom 32 lines.
 const uint8_t kRefreshDepth = 36;       // Tradeoff of color quality vs refresh rate, max brightness, and RAM usage.  36 is typically good, drop down to 24 if you need to.  On Teensy, multiples of 3, up to 48: 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48.  On ESP32: 24, 36, 48
 const uint8_t kDmaBufferRows = 4;       // known working: 2-4, use 2 to save RAM, more to keep from dropping frames and automatically lowering refresh rate.  (This isn't used on ESP32, leave as default)
-const uint8_t kPanelType = SM_PANELTYPE_HUB75_32ROW_MOD16SCAN;   // Choose the configuration that matches your panels.  See more details in MatrixCommonHub75.h and the docs: https://github.com/pixelmatix/SmartMatrix/wiki
-const uint32_t kMatrixOptions = (SM_HUB75_OPTIONS_NONE);         // see docs for options: https://github.com/pixelmatix/SmartMatrix/wiki
+const uint8_t kPanelType = SM_PANELTYPE_HUB75_32ROW_MOD16SCAN;  // Choose the configuration that matches your panels.  See more details in MatrixCommonHub75.h and the docs: https://github.com/pixelmatix/SmartMatrix/wiki
+const uint32_t kMatrixOptions = (SM_HUB75_OPTIONS_NONE);        // see docs for options: https://github.com/pixelmatix/SmartMatrix/wiki
 const uint8_t kBackgroundLayerOptions = (SM_BACKGROUND_OPTIONS_NONE);
 
 // Allocate buffers for matrix LED display (also copied from GitHub page)
+// This program only uses one layer
 SMARTMATRIX_ALLOCATE_BUFFERS(matrix, kMatrixWidth, kMatrixHeight, kRefreshDepth, kDmaBufferRows, kPanelType, kMatrixOptions);
 SMARTMATRIX_ALLOCATE_BACKGROUND_LAYER(backgroundLayer, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kBackgroundLayerOptions);
 
@@ -36,32 +38,30 @@ const unsigned short rightEyeDataIndex = 4;
 const unsigned short noseDataIndex = 5;
 
 // Global variables for facial expression control
-// Could have used char but using short, I'm not broke on memory right now
+// Could have used char but using short. Variables are all bounded.
 unsigned short mouthWidth = 0;          // (current mouth width) / (max mouth width) * 128, maximum 127 minimum 1 guaranteed
 unsigned short mouthHeight = 0;         // (current mouth height) / (max mouth height) * 128, maximum 127 minimum 1 guaranteed
 unsigned short leftEyeEAR128 = 0;       // (left eye EAR) * 128, maximum 127 minimum 1 guaranteed
 unsigned short rightEyeEAR128 = 0;      // (right eye EAR) * 128, maximum 127 minimum 1 guaranteed
 signed short noseOffset = 0;            // (nose offset) / |(maximum nose offset)| * 64, maximum 63 minimum -63 guaranteed
-                                        // nose offset is parsed by mapping 0000001 ~ 1111111 to -63 ~ 63 unlike traditional signed variables
+                            // !IMPORTANT!! nose offset is parsed by mapping 0000001 ~ 1111111 to -63 ~ 63 unlike traditional signed variables
 
 // Global variables for video display
-char* video_filename_prefix;
-char* video_filename_extension = ".png";
-uint8_t frame_cnt = 134; // obviously should not be 0
-uint8_t frame_idx_digits = 0; // automatically derived from frame_cnt, leave as 0
-uint8_t frame_start = 1;
-uint8_t video_idx = 0;
-uint8_t fps = 8;
+char* videoFilenamePrefix;                  // strdup'ed every time when new video is loaded
+char* videoFilenameExtension = ".png";      // Fixed to .png
+uint8_t frame_cnt = 134;                    // obviously should not be 0, set when video is loaded
+uint8_t frame_idx_digits = 0;               // automatically derived from frame_cnt, leave as 0
+uint8_t frame_start = 1;                    // assumes ffmpeg output, frame index starts at 1
+uint8_t video_idx = 0;                      // (current frame index) - (frame_start)
+uint8_t fps = 8;                            // frames per second, currently fixed to 8
+bool videoFilenameInitiallyDuped = false;
 
 // Constants for mode transition
-const unsigned short mouth_mode = 0;
-const unsigned short video_mode = 1;
+const unsigned short mouth_mode = 0;        // mode number for face tracking
+const unsigned short video_mode = 1;        // mode number for video display
 
 // Global variables for mode transition
 unsigned short mode = 1;
-
-// Other global variables
-bool initialized = false;
 
 // Other constants
 const uint32_t millisInOneLoop = 50;
@@ -85,10 +85,13 @@ int readVideoConfigFromJSON(const char* filename) {
     File videoDataFile = SD.open(filename);
     StaticJsonDocument<512> videoDataJson;
     deserializeJson(videoDataJson, videoDataFile);
-    if(initialized) {
-        free(video_filename_prefix);
+    if(videoFilenameInitiallyDuped) {
+        free(videoFilenamePrefix);
     }
-    video_filename_prefix = strdup(videoDataJson["video_filename_prefix"]);
+    else {
+        videoFilenameInitiallyDuped = true;
+    }
+    videoFilenamePrefix = strdup(videoDataJson["video_filename_prefix"]);
     frame_cnt = atoi(videoDataJson["frame_cnt"]);
     video_idx = 0;
     uint8_t tmp_frame_cnt = frame_cnt;
@@ -101,7 +104,7 @@ int readVideoConfigFromJSON(const char* filename) {
     return 0;
 }
 
-// Functions for PNG file processing, mostly copied from example code
+// Global variables and functions for PNG file processing, mostly copied from example code
 File sdPNGFile;
 PNG png;
 
@@ -137,11 +140,12 @@ int32_t seekPNG(PNGFILE *handle, int32_t position) {
 }
 
 void drawPNG(PNGDRAW *pDraw) {
-    uint16_t line565[65];
-    png.getLineAsRGB565(pDraw, line565, PNG_RGB565_LITTLE_ENDIAN, 0xffffffff);
+    uint16_t line565[65]; // Variable to store RGB565 pixel data for each line
+    png.getLineAsRGB565(pDraw, line565, PNG_RGB565_LITTLE_ENDIAN, 0xffffffff); // Get line pixel data.
     for(int i=0; i<64; i++) {
-        // code from stackoverflow. I'm not very proud of myself
+        // RGB565 to RGB888 code from stackoverflow & arduino forums. I'm not very proud of myself
         rgb24 pixelColor = (rgb24){((((line565[i] >> 11) & 0x1F) * 527) + 23) >> 6, ((((line565[i] >> 5) & 0x3F) * 259) + 33) >> 6, (((line565[i] & 0x1F) * 527) + 23) >> 6};
+        // Draw pixel on both displays
         backgroundLayer.drawPixel(i, pDraw->y, pixelColor);
         backgroundLayer.drawPixel(i, 32 + pDraw->y, pixelColor);
     }
@@ -178,15 +182,10 @@ void setup() {
     SD.begin(BUILTIN_SDCARD);
 
     // Read video information
-    readVideoConfigFromJSON("boykisser.json");
-    Serial.println(video_filename_prefix);
-    Serial.println(frame_cnt);
+    readVideoConfigFromJSON("video_data.json");
 
     // Initialize Serial1 in order to communicate with Raspberry Pi Zero 2 W 
     Serial1.begin(9600);
-
-    // Set flag
-    initialized = true;
 }
 
 // Loop function
@@ -201,34 +200,41 @@ void loop() {
     // no corruption check. I trust you bluetooth
     if(Serial5.available()) {
         delay(100);
+        // First byte of received data is command
         char command = Serial5.read();
         switch(command) {
             case 'v': // video change command
             {
+                // Read video config filename from bluetooth serial
                 int btDataLength = Serial5.available();
-                Serial.println(btDataLength);
                 char* btReceivedData = (char*)malloc((btDataLength + 1) * sizeof(char));
                 for(int i = 0; i < btDataLength; i++) { 
                     btReceivedData[i] = Serial5.read();
                 }
                 btReceivedData[btDataLength] = '\0';
-                Serial5.println(btReceivedData);
+
+                // Read actual video config
                 readVideoConfigFromJSON(btReceivedData);
+
+                // Free pointers
                 free(btReceivedData);
                 break;
             }
             case 'm': // mode change command
             {
+                // Change mode
                 mode = Serial5.read() - int('0');
                 break;
-            }   
+            }
         }
+
+        // Flush all leftover data
         while(Serial5.available()) {
             Serial5.read();
         }
     }
 
-    // Check for new raspberry pi input
+    // Check for new raspberry pi serial input
     if(Serial1.available() > dataLength) {
         // There was some error (bytes shifted, etc..) while receiving data, discard all of it
         // TODO: salvage at least SOME of the data. ex: only retrieve the last 5 bytes
@@ -267,6 +273,7 @@ void loop() {
                 // First fill background with a nice gray
                 backgroundLayer.fillScreen({24, 24, 24});
 
+                // malloc and set text for each labels
                 char *mouthWidthLabelText = (char*) malloc(sizeof(char) * 11);
                 char *mouthHeightLabelText = (char*) malloc(sizeof(char) * 11);
                 char *leftEyeEARLabelText = (char*) malloc(sizeof(char) * 11);
@@ -277,6 +284,8 @@ void loop() {
                 sprintf(leftEyeEARLabelText, "L.E: %d", leftEyeEAR128);
                 sprintf(rightEyeEARLabelText, "R.E: %d", rightEyeEAR128);
                 sprintf(noseLabelText, "N.O: %d", noseOffset);
+
+                // draw text for each labels
                 backgroundLayer.setFont(font3x5);
                 drawTextOnRGB24BackgroundLayer(backgroundLayer, 3, 0, 1, faceColor, mouthWidthLabelText);
                 drawTextOnRGB24BackgroundLayer(backgroundLayer, 3, 0, 7, faceColor, mouthHeightLabelText);
@@ -295,29 +304,31 @@ void loop() {
                 free(noseLabelText);
             }
 
-            // Basic loop control (sum.mit.edu)
+            // Basic loop control
             while(millis() - startTime < millisInOneLoop) {
                 // Do nothing and wait
             }
             break;
         case 1: // Video display mode
             // Open frame image file
-            Serial.println("OK");
-            char* filename = (char*) malloc(sizeof(char) * (strlen(video_filename_prefix) + frame_idx_digits + strlen(video_filename_extension) + 1));
+            char* filename = (char*) malloc(sizeof(char) * (strlen(videoFilenamePrefix) + frame_idx_digits + strlen(videoFilenameExtension) + 1));
             char* sprintf_str = (char*) malloc(sizeof(char) * (2 + 4 + 2 + 1));
             sprintf(sprintf_str, "%%s%%0%dd%%s", frame_idx_digits);
-            sprintf(filename, sprintf_str, video_filename_prefix, video_idx + frame_start, video_filename_extension);
+            sprintf(filename, sprintf_str, videoFilenamePrefix, video_idx + frame_start, videoFilenameExtension);
             free(sprintf_str);
 
             // Open PNG
             backgroundLayer.fillScreen({0, 0, 0});
-            Serial.println(filename);
             int rc = png.open(filename, openPNG, closePNG, readPNG, seekPNG, drawPNG);
-            Serial.println(rc == PNG_SUCCESS);
             if(rc == PNG_SUCCESS){
+                // Decode PNG and draw
                 rc = png.decode(NULL, 0);
             }
+            
+            // Apply changes onto screen
             backgroundLayer.swapBuffers(false);
+            
+            // Close file and free pointers
             png.close();
             free(filename);
 
@@ -330,6 +341,10 @@ void loop() {
             while(millis() - startTime < (1000 / fps)) {
                 // wait
             }
+            break;
+        default: // If mode is invalid
+            // fallback to face tracking mode
+            mode = 0;
             break;
     }
 }
