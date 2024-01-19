@@ -49,11 +49,11 @@ signed short noseOffset = 0;            // (nose offset) / |(maximum nose offset
 // Global variables for video display
 char* videoFilenamePrefix;                  // strdup'ed every time when new video is loaded
 char* videoFilenameExtension = ".png";      // Fixed to .png
-uint8_t frame_cnt = 134;                    // obviously should not be 0, set when video is loaded
-uint8_t frame_idx_digits = 0;               // automatically derived from frame_cnt, leave as 0
-uint8_t frame_start = 1;                    // assumes ffmpeg output, frame index starts at 1
-uint8_t video_idx = 0;                      // (current frame index) - (frame_start)
-uint8_t fps = 8;                            // frames per second, currently fixed to 8
+uint32_t frame_cnt = 134;                    // obviously should not be 0, set when video is loaded
+uint32_t frame_idx_digits = 0;               // automatically derived from frame_cnt, leave as 0
+uint32_t frame_start = 1;                    // assumes ffmpeg output, frame index starts at 1
+uint32_t video_idx = 0;                      // (current frame index) - (frame_start)
+uint8_t fps;                            // frames per second, currently fixed to 8
 bool videoFilenameInitiallyDuped = false;
 
 // Constants for mode transition
@@ -64,7 +64,7 @@ const unsigned short video_mode = 1;        // mode number for video display
 unsigned short mode = 1;
 
 // Other constants
-const uint32_t millisInOneLoop = 50;
+const uint32_t microsInOneLoop = 50000;
 
 // Functions
 void drawTextOnRGB24BackgroundLayer(SMLayerBackground<rgb24, 0U> layer, unsigned short fontWidth, int16_t x, int16_t y, rgb24 &color, const char* text) {
@@ -92,14 +92,18 @@ int readVideoConfigFromJSON(const char* filename) {
         videoFilenameInitiallyDuped = true;
     }
     videoFilenamePrefix = strdup(videoDataJson["video_filename_prefix"]);
+    Serial.println((const char*)videoDataJson["frame_cnt"]);
     frame_cnt = atoi(videoDataJson["frame_cnt"]);
+    fps = atoi(videoDataJson["fps"]);
+    Serial.println(frame_cnt);
     video_idx = 0;
-    uint8_t tmp_frame_cnt = frame_cnt;
+    uint32_t tmp_frame_cnt = frame_cnt;
     frame_idx_digits = 0;
     while(tmp_frame_cnt) {
         frame_idx_digits++;
         tmp_frame_cnt /= 10;
     }
+    Serial.println(frame_idx_digits);
     videoDataFile.close();
     return 0;
 }
@@ -182,7 +186,10 @@ void setup() {
     SD.begin(BUILTIN_SDCARD);
 
     // Read video information
-    readVideoConfigFromJSON("video_data.json");
+    readVideoConfigFromJSON("lagtrain.json");
+
+    // Start mic input
+    pinMode(23, INPUT);
 
     // Initialize Serial1 in order to communicate with Raspberry Pi Zero 2 W 
     Serial1.begin(9600);
@@ -190,11 +197,13 @@ void setup() {
 
 // Loop function
 void loop() {
-    uint32_t startTime = millis();
+    uint32_t startTime = micros();
 
     // Variables for input processing
     char receivedData[dataLength];
     bool newData = false;
+
+    Serial.println(digitalRead(23));
 
     // Check for new bluetooth input and process it
     // no corruption check. I trust you bluetooth
@@ -305,7 +314,7 @@ void loop() {
             }
 
             // Basic loop control
-            while(millis() - startTime < millisInOneLoop) {
+            while(micros() - startTime < microsInOneLoop) {
                 // Do nothing and wait
             }
             break;
@@ -338,13 +347,9 @@ void loop() {
                 video_idx = 0;
             }
 
-            while(millis() - startTime < (1000 / fps)) {
+            while(micros() - startTime < (1000000 / fps)) {
                 // wait
             }
-            break;
-        default: // If mode is invalid
-            // fallback to face tracking mode
-            mode = 0;
             break;
     }
 }
