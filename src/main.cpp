@@ -151,7 +151,9 @@ void drawPNG(PNGDRAW *pDraw) {
         rgb24 pixelColor = (rgb24){((((line565[i] >> 11) & 0x1F) * 527) + 23) >> 6, ((((line565[i] >> 5) & 0x3F) * 259) + 33) >> 6, (((line565[i] & 0x1F) * 527) + 23) >> 6};
         // Draw pixel on both displays
         backgroundLayer.drawPixel(i, pDraw->y, pixelColor);
-        backgroundLayer.drawPixel(i, 32 + pDraw->y, pixelColor);
+        if(png.getHeight() <= 32) {
+            backgroundLayer.drawPixel(i, 32 + pDraw->y, pixelColor);
+        }
     }
 }
 
