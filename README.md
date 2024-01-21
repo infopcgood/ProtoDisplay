@@ -8,7 +8,7 @@ This repository contains the software for my protogen fursuit head, which has it
 - microSD card (FAT32)
 - Raspberry Pi (Zero 2 W is preferred) with a camera attatched (runs a separate program, read below)
 - HC-05 or HC-06 Bluetooth serial module
-- 5V power supply or USB PD decoy trigger+XL4106 step down module (max to around 15A when very bright)
+- 5V power supply or USB PD decoy trigger+XL4106 step down module (max to around 24W when very bright)
 
 Feel free to use this software & contact me if you have any problems. Enjoy!
 
