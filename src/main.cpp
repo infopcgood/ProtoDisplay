@@ -53,7 +53,7 @@ uint32_t frame_cnt = 134;                    // obviously should not be 0, set w
 uint32_t frame_idx_digits = 0;               // automatically derived from frame_cnt, leave as 0
 uint32_t frame_start = 1;                    // assumes ffmpeg output, frame index starts at 1
 uint32_t video_idx = 0;                      // (current frame index) - (frame_start)
-uint8_t fps;                            // frames per second, currently fixed to 8
+uint8_t videoFPS;                            // frames per second, currently fixed to 8
 bool videoFilenameInitiallyDuped = false;
 
 // Constants for mode transition
@@ -94,7 +94,7 @@ int readVideoConfigFromJSON(const char* filename) {
     videoFilenamePrefix = strdup(videoDataJson["video_filename_prefix"]);
     Serial.println((const char*)videoDataJson["frame_cnt"]);
     frame_cnt = atoi(videoDataJson["frame_cnt"]);
-    fps = atoi(videoDataJson["fps"]);
+    videoFPS = atoi(videoDataJson["fps"]);
     Serial.println(frame_cnt);
     video_idx = 0;
     uint32_t tmp_frame_cnt = frame_cnt;
@@ -349,7 +349,7 @@ void loop() {
                 video_idx = 0;
             }
 
-            while(micros() - startTime < (1000000 / fps)) {
+            while(micros() - startTime < (1000000 / videoFPS)) {
                 // wait
             }
             break;
