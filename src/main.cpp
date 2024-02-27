@@ -11,6 +11,9 @@
 #include <MatrixHardware_Teensy4_ShieldV5.h>
 #include <SmartMatrix.h>
 #include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 // Set variables for SmartMatrix library (copied from their GitHub page)
 // If you use a non-standard HUB75 display you might have to tweak these settings a little bit.
@@ -27,6 +30,9 @@ const uint8_t kBackgroundLayerOptions = (SM_BACKGROUND_OPTIONS_NONE);
 // This program only uses one layer
 SMARTMATRIX_ALLOCATE_BUFFERS(matrix, kMatrixWidth, kMatrixHeight, kRefreshDepth, kDmaBufferRows, kPanelType, kMatrixOptions);
 SMARTMATRIX_ALLOCATE_BACKGROUND_LAYER(backgroundLayer, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kBackgroundLayerOptions);
+
+// SSD1309 display
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
 // Constants for facial express control
 rgb24 faceColor = {24, 152, 220};
@@ -151,6 +157,12 @@ void drawPNG(PNGDRAW *pDraw) {
         rgb24 pixelColor = (rgb24){((((line565[i] >> 11) & 0x1F) * 527) + 23) >> 6, ((((line565[i] >> 5) & 0x3F) * 259) + 33) >> 6, (((line565[i] & 0x1F) * 527) + 23) >> 6};
         // Draw pixel on both displays
         backgroundLayer.drawPixel(i, pDraw->y, pixelColor);
+        if((pixelColor.blue + pixelColor.red + pixelColor.green) > 0) {
+            display.drawPixel(i * 2, pDraw->y * 2, WHITE);
+            display.drawPixel(i * 2, pDraw->y * 2 + 1, WHITE);
+            display.drawPixel(i * 2 + 1, pDraw->y * 2, WHITE);
+            display.drawPixel(i * 2 + 1, pDraw->y * 2 + 1, WHITE);
+        }
         if(png.getHeight() <= 32) {
             backgroundLayer.drawPixel(i, 32 + pDraw->y, pixelColor);
         }
@@ -169,6 +181,13 @@ void setup() {
     // Initialize matrix
     matrix.addLayer(&backgroundLayer);
     matrix.begin();
+
+    // Intialize SSD1309 screen
+    display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+    display.display();
+    delay(500);
+    
+    display.clearDisplay();
 
     // Matrix is too bright, might as well dim it
     matrix.setBrightness(191);
@@ -330,6 +349,7 @@ void loop() {
 
             // Open PNG
             backgroundLayer.fillScreen({0, 0, 0});
+            display.clearDisplay();
             int rc = png.open(filename, openPNG, closePNG, readPNG, seekPNG, drawPNG);
             if(rc == PNG_SUCCESS){
                 // Decode PNG and draw
@@ -338,6 +358,7 @@ void loop() {
             
             // Apply changes onto screen
             backgroundLayer.swapBuffers(false);
+            display.display();
             
             // Close file and free pointers
             png.close();
