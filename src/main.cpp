@@ -14,6 +14,9 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <string>
+
+using namespace std;
 
 // Set variables for SmartMatrix library (copied from their GitHub page)
 // If you use a non-standard HUB75 display you might have to tweak these settings a little bit.
@@ -53,8 +56,8 @@ signed short noseOffset = 0;            // (nose offset) / |(maximum nose offset
                             // !IMPORTANT!! nose offset is parsed by mapping 0000001 ~ 1111111 to -63 ~ 63 unlike traditional signed variables
 
 // Global variables for video display
-char* videoFilenamePrefix;                  // strdup'ed every time when new video is loaded
-char* videoFilenameExtension = ".png";      // Fixed to .png
+string videoFilenamePrefix;                  // strdup'ed every time when new video is loaded
+string videoFilenameExtension = ".png";      // Fixed to .png
 uint32_t frame_cnt = 134;                    // obviously should not be 0, set when video is loaded
 uint32_t frame_idx_digits = 0;               // automatically derived from frame_cnt, leave as 0
 uint32_t frame_start = 1;                    // assumes ffmpeg output, frame index starts at 1
@@ -81,27 +84,19 @@ void drawTextOnRGB24BackgroundLayer(SMLayerBackground<rgb24, 0U> layer, unsigned
     return;
 }
 
-int readVideoConfigFromJSON(const char* filename) {
-    if(!SD.exists(filename)) {
+int readVideoConfigFromJSON(string filename) {
+    if(!SD.exists(filename.c_str())) {
         Serial.print("File ");
-        Serial.print(filename);
+        Serial.print(filename.c_str());
         Serial.println(" does not exist on SD.");
         return -1;
     }
-    File videoDataFile = SD.open(filename);
+    File videoDataFile = SD.open(filename.c_str());
     StaticJsonDocument<512> videoDataJson;
     deserializeJson(videoDataJson, videoDataFile);
-    if(videoFilenameInitiallyDuped) {
-        free(videoFilenamePrefix);
-    }
-    else {
-        videoFilenameInitiallyDuped = true;
-    }
-    videoFilenamePrefix = strdup(videoDataJson["video_filename_prefix"]);
-    Serial.println((const char*)videoDataJson["frame_cnt"]);
+    videoFilenamePrefix = (const char*)videoDataJson["video_filename_prefix"];
     frame_cnt = atoi(videoDataJson["frame_cnt"]);
     videoFPS = atoi(videoDataJson["fps"]);
-    Serial.println(frame_cnt);
     video_idx = 0;
     uint32_t tmp_frame_cnt = frame_cnt;
     frame_idx_digits = 0;
@@ -109,7 +104,6 @@ int readVideoConfigFromJSON(const char* filename) {
         frame_idx_digits++;
         tmp_frame_cnt /= 10;
     }
-    Serial.println(frame_idx_digits);
     videoDataFile.close();
     return 0;
 }
@@ -207,7 +201,7 @@ void setup() {
     SD.begin(BUILTIN_SDCARD);
 
     // Read video information
-    readVideoConfigFromJSON("lagtrain.json");
+    readVideoConfigFromJSON("rgb_test.json");
 
     // Start mic input
     pinMode(23, INPUT);
@@ -300,38 +294,15 @@ void loop() {
                 noseOffset = receivedData[noseDataIndex] - 64;
 
                 // Now update the matrix
-                // First fill background with a nice gray
-                backgroundLayer.fillScreen({24, 24, 24});
-
-                // malloc and set text for each labels
-                char *mouthWidthLabelText = (char*) malloc(sizeof(char) * 11);
-                char *mouthHeightLabelText = (char*) malloc(sizeof(char) * 11);
-                char *leftEyeEARLabelText = (char*) malloc(sizeof(char) * 11);
-                char *rightEyeEARLabelText = (char*) malloc(sizeof(char) * 11);
-                char *noseLabelText = (char*) malloc(sizeof(char) * 12);
-                sprintf(mouthWidthLabelText, "M.W: %d", mouthWidth);
-                sprintf(mouthHeightLabelText, "M.H: %d", mouthHeight);
-                sprintf(leftEyeEARLabelText, "L.E: %d", leftEyeEAR128);
-                sprintf(rightEyeEARLabelText, "R.E: %d", rightEyeEAR128);
-                sprintf(noseLabelText, "N.O: %d", noseOffset);
-
-                // draw text for each labels
-                backgroundLayer.setFont(font3x5);
-                drawTextOnRGB24BackgroundLayer(backgroundLayer, 3, 0, 1, faceColor, mouthWidthLabelText);
-                drawTextOnRGB24BackgroundLayer(backgroundLayer, 3, 0, 7, faceColor, mouthHeightLabelText);
-                drawTextOnRGB24BackgroundLayer(backgroundLayer, 3, 0, 14, faceColor, leftEyeEARLabelText);
-                drawTextOnRGB24BackgroundLayer(backgroundLayer, 3, 0, 20, faceColor, rightEyeEARLabelText);
-                drawTextOnRGB24BackgroundLayer(backgroundLayer, 3, 0, 26, faceColor, noseLabelText);
-
-                // Update actual display and discard all the drawing history stored in the buffer
-                backgroundLayer.swapBuffers(false);
-
-                // Free all allocated pointers
-                free(mouthWidthLabelText);
-                free(mouthHeightLabelText);
-                free(leftEyeEARLabelText);
-                free(rightEyeEARLabelText);
-                free(noseLabelText);
+                // First clean background
+                backgroundLayer.fillScreen({0, 0, 0});
+                display.clearDisplay();
+                // Draw eyes
+                // int rc = png.open(filename, openPNG, closePNG, readPNG, seekPNG, drawPNG);
+                // if(rc == PNG_SUCCESS){
+                //     // Decode PNG and draw
+                //     rc = png.decode(NULL, 0);
+                // }      
             }
 
             // Basic loop control
@@ -341,16 +312,17 @@ void loop() {
             break;
         case 1: // Video display mode
             // Open frame image file
-            char* filename = (char*) malloc(sizeof(char) * (strlen(videoFilenamePrefix) + frame_idx_digits + strlen(videoFilenameExtension) + 1));
+            char* filename_char = (char*) malloc(sizeof(char) * (videoFilenamePrefix.length() + frame_idx_digits + videoFilenameExtension.length() + 1));
             char* sprintf_str = (char*) malloc(sizeof(char) * (2 + 4 + 2 + 1));
             sprintf(sprintf_str, "%%s%%0%dd%%s", frame_idx_digits);
-            sprintf(filename, sprintf_str, videoFilenamePrefix, video_idx + frame_start, videoFilenameExtension);
+            sprintf(filename_char, sprintf_str, videoFilenamePrefix, video_idx + frame_start, videoFilenameExtension);
             free(sprintf_str);
+            string filename = filename_char;
 
             // Open PNG
             backgroundLayer.fillScreen({0, 0, 0});
             display.clearDisplay();
-            int rc = png.open(filename, openPNG, closePNG, readPNG, seekPNG, drawPNG);
+            int rc = png.open(filename.c_str(), openPNG, closePNG, readPNG, seekPNG, drawPNG);
             if(rc == PNG_SUCCESS){
                 // Decode PNG and draw
                 rc = png.decode(NULL, 0);
@@ -362,7 +334,7 @@ void loop() {
             
             // Close file and free pointers
             png.close();
-            free(filename);
+            free(filename_char);
 
             // Increment index and loop
             video_idx++;
